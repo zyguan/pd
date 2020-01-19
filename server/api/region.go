@@ -39,6 +39,8 @@ type RegionInfo struct {
 	PendingPeers    []*metapb.Peer    `json:"pending_peers,omitempty"`
 	WrittenBytes    uint64            `json:"written_bytes,omitempty"`
 	ReadBytes       uint64            `json:"read_bytes,omitempty"`
+	WrittenKeys     uint64            `json:"written_keys,omitempty"`
+	ReadKeys        uint64            `json:"read_keys,omitempty"`
 	ApproximateSize int64             `json:"approximate_size,omitempty"`
 	ApproximateKeys int64             `json:"approximate_keys,omitempty"`
 }
@@ -64,6 +66,8 @@ func InitRegion(r *core.RegionInfo, s *RegionInfo) *RegionInfo {
 	s.PendingPeers = r.GetPendingPeers()
 	s.WrittenBytes = r.GetBytesWritten()
 	s.ReadBytes = r.GetBytesRead()
+	s.WrittenKeys = r.GetKeysWritten()
+	s.ReadKeys = r.GetKeysRead()
 	s.ApproximateSize = r.GetApproximateSize()
 	s.ApproximateKeys = r.GetApproximateKeys()
 
