@@ -32,7 +32,7 @@ require (
 	github.com/pingcap/check v0.0.0-20191107115940-caf2b9e6ccf4
 	github.com/pingcap/errcode v0.0.0-20180921232412-a1a7271709d9
 	github.com/pingcap/failpoint v0.0.0-20191029060244-12f4ac2fd11d
-	github.com/pingcap/kvproto v0.0.0-20200210234432-a965739f8162
+	github.com/pingcap/kvproto v0.0.0-20200211073310-3874eea3a3a3
 	github.com/pingcap/log v0.0.0-20191012051959-b742a5d432e9
 	github.com/pingcap/sysutil v0.0.0-20200206130906-2bfa6dc40bcd
 	github.com/pkg/errors v0.8.1
