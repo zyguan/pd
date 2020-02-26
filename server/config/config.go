@@ -132,7 +132,8 @@ type Config struct {
 
 	EnableDynamicConfig bool
 
-	EnableDashboard bool
+	EnableDashboard    bool
+	CollectionInterval int64
 }
 
 // NewConfig creates a new config.
@@ -169,6 +170,7 @@ func NewConfig() *Config {
 	fs.BoolVar(&cfg.EnableDynamicConfig, "enable-dynamic-config", false, "Enable dynamic configuration change")
 
 	fs.BoolVar(&cfg.EnableDashboard, "enable-dashboard", true, "Enable Dashboard API and UI on this node")
+	fs.Int64Var(&cfg.CollectionInterval, "collection-interval", 60, "Collection interval of statistics")
 
 	return cfg
 }

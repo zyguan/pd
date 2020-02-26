@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/pingcap-incubator/tidb-dashboard/pkg/apiserver"
 	"github.com/pingcap-incubator/tidb-dashboard/pkg/config"
@@ -60,8 +61,9 @@ func NewService(ctx context.Context, srv *server.Server) (http.Handler, server.S
 		panic(err)
 	}
 	dashboardCfg := &config.Config{
-		DataDir:    cfg.DataDir,
-		PDEndPoint: etcdCfg.ACUrls[0].String(),
+		DataDir:            cfg.DataDir,
+		PDEndPoint:         etcdCfg.ACUrls[0].String(),
+		CollectionInterval: time.Duration(cfg.CollectionInterval) * time.Second,
 	}
 	dashboardCfg.TLSConfig, err = cfg.Security.ToTLSConfig()
 	if err != nil {
