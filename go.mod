@@ -10,6 +10,7 @@ go 1.25.12
 require (
 	github.com/AlekSi/gocov-xml v1.0.0
 	github.com/BurntSushi/toml v1.5.0
+	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751
 	github.com/aws/aws-sdk-go-v2/config v1.27.37
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.35
 	github.com/aws/aws-sdk-go-v2/service/kms v1.26.5
@@ -264,3 +265,7 @@ require (
 // which will cause several different tests to fail. So this is a temporary workaround to use the old version of `testify`.
 // TODO: fix those flasky tests introduced by the behavior change of `Eventually` and `EventuallyWithT` assertions.
 replace github.com/stretchr/testify => github.com/stretchr/testify v1.10.0
+
+// TODO: Remove this replace directive after https://github.com/pingcap/kvproto/pull/1534 is merged
+// and the dependency is updated to a merged version.
+replace github.com/pingcap/kvproto => github.com/zyguan/kvproto v0.0.0-20260915101029-a933797cff4c
