@@ -46,7 +46,6 @@ require (
 	github.com/ReneKroon/ttlcache/v2 v2.3.0 // indirect
 	github.com/VividCortex/mysqlerr v1.0.0 // indirect
 	github.com/Xeoncross/go-aesctr-with-hmac v0.0.0-20200623134604-12b17a7ff502 // indirect
-	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751 // indirect
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.0.11 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect

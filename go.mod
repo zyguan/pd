@@ -10,7 +10,6 @@ go 1.25.12
 require (
 	github.com/AlekSi/gocov-xml v1.0.0
 	github.com/BurntSushi/toml v1.5.0
-	github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751
 	github.com/aws/aws-sdk-go-v2/config v1.27.37
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.35
 	github.com/aws/aws-sdk-go-v2/service/kms v1.26.5
