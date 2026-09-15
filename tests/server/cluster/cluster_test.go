@@ -1313,8 +1313,8 @@ func getStore(re *require.Assertions, clusterID uint64, grpcPDClient pdpb.PDClie
 	return resp.GetStore()
 }
 
-func getAllStores(re *require.Assertions, clusterID uint64, grpcPDClient pdpb.PDClient) []*metapb.Store {
-	resp, err := grpcPDClient.GetAllStores(context.Background(), &pdpb.GetAllStoresRequest{
+func getAllStores(ctx context.Context, re *require.Assertions, clusterID uint64, grpcPDClient pdpb.PDClient) []*metapb.Store {
+	resp, err := grpcPDClient.GetAllStores(ctx, &pdpb.GetAllStoresRequest{
 		Header:                 testutil.NewRequestHeader(clusterID),
 		ExcludeTombstoneStores: true,
 	})
@@ -1326,6 +1326,7 @@ func getAllStores(re *require.Assertions, clusterID uint64, grpcPDClient pdpb.PD
 // requireTxnProtocolVersionRange asserts the txn protocol version range returned
 // by the in-memory cache, GetStore and GetAllStores.
 func requireTxnProtocolVersionRange(
+	ctx context.Context,
 	re *require.Assertions,
 	rc *cluster.RaftCluster,
 	clusterID uint64,
@@ -1352,7 +1353,7 @@ func requireTxnProtocolVersionRange(
 	check(getStore(re, clusterID, grpcPDClient, storeID))
 	// GetAllStores. The range must be carried by the same entry which is returned
 	// for the store, so only one match is accepted.
-	stored := getAllStores(re, clusterID, grpcPDClient)
+	stored := getAllStores(ctx, re, clusterID, grpcPDClient)
 	matches := 0
 	for _, s := range stored {
 		if s.GetId() != storeID {
@@ -1430,7 +1431,7 @@ func TestStoreTxnProtocolVersionRange(t *testing.T) {
 
 	// The seeded stores are loaded from the storage.
 	for storeID, versionRange := range seeded {
-		requireTxnProtocolVersionRange(re, rc, clusterID, grpcPDClient, storeID, versionRange)
+		requireTxnProtocolVersionRange(ctx, re, rc, clusterID, grpcPDClient, storeID, versionRange)
 	}
 
 	// Registering a store which does not exist yet must carry the reported range
@@ -1439,7 +1440,7 @@ func TestStoreTxnProtocolVersionRange(t *testing.T) {
 		resp, err := putStore(grpcPDClient, clusterID, newTxnProtocolVersionRangeStore(storeID, storeAddr(storeID), versionRange))
 		re.NoError(err)
 		re.Equal(pdpb.ErrorType_OK, resp.GetHeader().GetError().GetType())
-		requireTxnProtocolVersionRange(re, rc, clusterID, grpcPDClient, storeID, versionRange)
+		requireTxnProtocolVersionRange(ctx, re, rc, clusterID, grpcPDClient, storeID, versionRange)
 	}
 	registerAndCheck(newNilRangeStoreID, nil)
 	registerAndCheck(newEmptyRangeStoreID, &metapb.TxnProtocolVersionRange{})
@@ -1456,7 +1457,7 @@ func TestStoreTxnProtocolVersionRange(t *testing.T) {
 		re.NoError(err)
 		re.Equal(pdpb.ErrorType_OK, resp.GetHeader().GetError().GetType())
 		expected[storeID] = versionRange
-		requireTxnProtocolVersionRange(re, rc, clusterID, grpcPDClient, storeID, versionRange)
+		requireTxnProtocolVersionRange(ctx, re, rc, clusterID, grpcPDClient, storeID, versionRange)
 	}
 	putAndCheck(updateStoreID, &metapb.TxnProtocolVersionRange{Min: 0, Max: 1})
 	putAndCheck(updateStoreID, &metapb.TxnProtocolVersionRange{Min: 0, Max: 2})
@@ -1490,7 +1491,7 @@ func TestStoreTxnProtocolVersionRange(t *testing.T) {
 	re.Len(got.GetLabels(), 2)
 	re.Equal("z3", got.GetLabels()[0].GetValue())
 	re.Equal("h1", got.GetLabels()[1].GetValue())
-	requireTxnProtocolVersionRange(re, rc, clusterID, grpcPDClient, updateStoreID, &metapb.TxnProtocolVersionRange{Min: 0, Max: 2})
+	requireTxnProtocolVersionRange(ctx, re, rc, clusterID, grpcPDClient, updateStoreID, &metapb.TxnProtocolVersionRange{Min: 0, Max: 2})
 
 	re.NoError(rc.DeleteStoreLabel(updateStoreID, "zone"))
 	got = getStore(re, clusterID, grpcPDClient, updateStoreID)
@@ -1498,7 +1499,7 @@ func TestStoreTxnProtocolVersionRange(t *testing.T) {
 	re.Equal("h1", got.GetLabels()[0].GetValue())
 	// All the stores of this test are registered by now, so the count reported by
 	// GetAllStores can be captured for the restart check below.
-	storeCount := requireTxnProtocolVersionRange(re, rc, clusterID, grpcPDClient, updateStoreID, &metapb.TxnProtocolVersionRange{Min: 0, Max: 2})
+	storeCount := requireTxnProtocolVersionRange(ctx, re, rc, clusterID, grpcPDClient, updateStoreID, &metapb.TxnProtocolVersionRange{Min: 0, Max: 2})
 	// The bootstrapped store plus the eight stores created above.
 	re.Equal(9, storeCount)
 
@@ -1519,23 +1520,23 @@ func TestStoreTxnProtocolVersionRange(t *testing.T) {
 	// Check the store of which the range was cleared first, so that a failed
 	// persistence is reported on the missing range instead of on the map lookup.
 	// The loop below covers it as well, because its last accepted range was nil.
-	requireTxnProtocolVersionRange(re, restartedRC, clusterID, grpcPDClient, clearedStoreID, nil)
+	requireTxnProtocolVersionRange(ctx, re, restartedRC, clusterID, grpcPDClient, clearedStoreID, nil)
 	// The updated store keeps its range.
 	for storeID, versionRange := range expected {
-		requireTxnProtocolVersionRange(re, restartedRC, clusterID, grpcPDClient, storeID, versionRange)
+		requireTxnProtocolVersionRange(ctx, re, restartedRC, clusterID, grpcPDClient, storeID, versionRange)
 	}
 	// The stores which are not in the expected map are restored as they were.
 	for storeID, versionRange := range seeded {
 		if _, ok := expected[storeID]; ok {
 			continue
 		}
-		requireTxnProtocolVersionRange(re, restartedRC, clusterID, grpcPDClient, storeID, versionRange)
+		requireTxnProtocolVersionRange(ctx, re, restartedRC, clusterID, grpcPDClient, storeID, versionRange)
 	}
 	// The stores which have been registered through PutStore keep the presence
 	// and the value which were accepted before the restart.
-	requireTxnProtocolVersionRange(re, restartedRC, clusterID, grpcPDClient, newNilRangeStoreID, nil)
-	lastCount := requireTxnProtocolVersionRange(re, restartedRC, clusterID, grpcPDClient, newEmptyRangeStoreID, &metapb.TxnProtocolVersionRange{})
-	requireTxnProtocolVersionRange(re, restartedRC, clusterID, grpcPDClient, newNonZeroRangeStoreID, &metapb.TxnProtocolVersionRange{Min: 1, Max: 2})
+	requireTxnProtocolVersionRange(ctx, re, restartedRC, clusterID, grpcPDClient, newNilRangeStoreID, nil)
+	lastCount := requireTxnProtocolVersionRange(ctx, re, restartedRC, clusterID, grpcPDClient, newEmptyRangeStoreID, &metapb.TxnProtocolVersionRange{})
+	requireTxnProtocolVersionRange(ctx, re, restartedRC, clusterID, grpcPDClient, newNonZeroRangeStoreID, &metapb.TxnProtocolVersionRange{Min: 1, Max: 2})
 	// No store is lost by the restart.
 	re.Equal(storeCount, lastCount)
 }
