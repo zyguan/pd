@@ -1513,7 +1513,8 @@ func (c *RaftCluster) DeleteStoreLabel(storeID uint64, labelKey string) error {
 
 // PutMetaStore puts a store.
 func (c *RaftCluster) PutMetaStore(store *metapb.Store) error {
-	if err := c.putStoreImpl(store, false); err != nil {
+	// Only a registration may replace or clear the reported protocol range.
+	if err := c.putStoreImpl(store, false, core.SetStoreTxnProtocolVersionRange(store.TxnProtocolVersionRange)); err != nil {
 		return err
 	}
 	c.OnStoreVersionChange()
@@ -1524,7 +1525,14 @@ func (c *RaftCluster) PutMetaStore(store *metapb.Store) error {
 // putStoreImpl puts a store.
 // If 'force' is true, the store's labels will overwrite those labels which already existed in the store.
 // If 'force' is false, the store's labels will merge into those labels which already existed in the store.
-func (c *RaftCluster) putStoreImpl(store *metapb.Store, force bool) error {
+// opts carries metadata updates specific to the caller, such as registration-only fields.
+func (c *RaftCluster) putStoreImpl(store *metapb.Store, force bool, opts ...core.StoreCreateOption) error {
+	failpoint.InjectCall("beforePutStore")
+	// Keep the metadata read, persistence and cache update in the same critical
+	// section so a label update cannot persist an outdated protocol range.
+	c.storeStateLock.Lock(uint32(store.GetId()))
+	defer c.storeStateLock.Unlock(uint32(store.GetId()))
+
 	if store.GetId() == 0 {
 		return errors.Errorf("invalid put store %v", store)
 	}
@@ -1557,11 +1565,11 @@ func (c *RaftCluster) putStoreImpl(store *metapb.Store, force bool) error {
 		}
 	}
 
-	opts := make([]core.StoreCreateOption, 0)
 	s := c.GetStore(store.GetId())
 	if s == nil {
 		// Add a new store.
-		s = core.NewStoreInfo(store)
+		s = core.NewStoreInfo(store, opts...)
+		opts = nil
 	} else {
 		// Use the given labels to update the store.
 		labels := store.GetLabels()
@@ -1573,14 +1581,14 @@ func (c *RaftCluster) putStoreImpl(store *metapb.Store, force bool) error {
 			core.SetStoreVersion(store.GitHash, store.Version),
 			core.SetStoreLabels(labels),
 			core.SetStoreStartTime(store.StartTimestamp),
-			core.SetStoreDeployPath(store.DeployPath),
-			core.SetStoreTxnProtocolVersionRange(store.TxnProtocolVersionRange))
+			core.SetStoreDeployPath(store.DeployPath))
 		// Update an existed store.
 		s = s.Clone(opts...)
 	}
 	if err := c.checkStoreLabels(s); err != nil {
 		return err
 	}
+	failpoint.InjectCall("beforePersistStore")
 	return c.setStore(s, opts...)
 }
 
