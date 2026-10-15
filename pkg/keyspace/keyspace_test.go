@@ -1117,6 +1117,34 @@ func (suite *keyspaceTestSuite) TestChecker() {
 	re.Empty(arr)
 }
 
+func (suite *keyspaceTestSuite) TestGCBarrierRemovalInvalidationAfterCommit() {
+	re := suite.Require()
+	m := suite.manager
+	meta := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 20000}, Name: "barrier-remove", State: keyspacepb.KeyspaceState_TOMBSTONE}
+	re.NoError(m.saveNewKeyspace(meta))
+	re.NoError(m.kgm.CreateKeyspaceGroups([]*endpoint.KeyspaceGroup{{ID: 101, UserKind: endpoint.Standard.String(), Keyspaces: []uint32{20000}}}))
+	calls := 0
+	m.SetGCBarrierInvalidator(func(id uint32) {
+		calls++
+		m.metaLock.Lock(id)
+		defer m.metaLock.Unlock(id)
+		_, err := m.LoadKeyspaceByID(id)
+		re.Error(err)
+		// A group operation takes the group lock, detecting lock-order regression.
+		_, err = m.kgm.GetKeyspaceGroups(101, 1)
+		re.NoError(err)
+	})
+	base := m.kgm.store
+	m.kgm.store = &errorKeyspaceGroupStorage{StorageEndpoint: m.store.(*endpoint.StorageEndpoint), failOnSaveID: 101}
+	_, err := m.kgm.removeKeyspacesFromGroupWithConditions(suite.ctx, 101, m, []uint32{20000}, nil)
+	re.Error(err)
+	re.Zero(calls)
+	m.kgm.store = base
+	_, err = m.kgm.removeKeyspacesFromGroupWithConditions(suite.ctx, 101, m, []uint32{20000}, nil)
+	re.NoError(err)
+	re.Equal(1, calls)
+}
+
 // TestRemoveKeyspaceCleansCache verifies that RemoveKeyspace deletes the
 // keyspace's entry from the in-memory cache, not just from the legacy
 // keyspaceNameLookup/keyspaceStateLookup maps, so a fully removed keyspace
@@ -1153,7 +1181,7 @@ func TestAssignGroupAndSaveKeyspace(t *testing.T) {
 	kgm := NewKeyspaceGroupManager(ctx, store, nil)
 
 	// No groups available: assign=true (stale pre-check) must not fail creation.
-	emptyMgm := NewMetaServiceGroupManager(store, map[string]string{})
+	emptyMgm := NewMetaServiceGroupManager(store, map[string]string{}, nil)
 	managerNoGroup := NewKeyspaceManager(ctx, store, nil, mockid.NewIDAllocator(), &mockConfig{}, kgm, emptyMgm)
 	cfg := map[string]string{}
 	ks := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 100}, Name: "ks-stale-precheck", Config: cfg}
@@ -1165,7 +1193,7 @@ func TestAssignGroupAndSaveKeyspace(t *testing.T) {
 
 	// A present, enabled group is still assigned. Groups are disabled by
 	// default, so it must be enabled before it is eligible for assignment.
-	mgm := NewMetaServiceGroupManager(store, map[string]string{"g1": "addr1"})
+	mgm := NewMetaServiceGroupManager(store, map[string]string{"g1": "addr1"}, nil)
 	enabled := true
 	re.NoError(mgm.PatchStatus(ctx, "g1", &MetaServiceGroupStatusPatch{Enabled: &enabled}))
 	managerWithGroup := NewKeyspaceManager(ctx, store, nil, mockid.NewIDAllocator(), &mockConfig{}, kgm, mgm)
@@ -1176,7 +1204,7 @@ func TestAssignGroupAndSaveKeyspace(t *testing.T) {
 
 	// A group that exists but is disabled must not fail creation: the keyspace is
 	// created without a meta-service group assignment instead.
-	disabledMgm := NewMetaServiceGroupManager(store, map[string]string{"g2": "addr2"})
+	disabledMgm := NewMetaServiceGroupManager(store, map[string]string{"g2": "addr2"}, nil)
 	managerDisabled := NewKeyspaceManager(ctx, store, nil, mockid.NewIDAllocator(), &mockConfig{}, kgm, disabledMgm)
 	cfg3 := map[string]string{}
 	ks3 := &keyspacepb.KeyspaceMeta{Keyspace: &keyspacepb.KeyspaceMeta_Id{Id: 102}, Name: "ks-disabled-group", Config: cfg3}
@@ -1193,7 +1221,7 @@ func (suite *keyspaceTestSuite) TestTombstoneKeyspaceUnassignsMetaServiceGroup()
 	re.True(ok)
 	// Start without any group so creation never auto-assigns: meta-service groups
 	// are disabled by default, and this keeps the test independent of that.
-	manager.mgm = NewMetaServiceGroupManager(metaServiceGroupStore, map[string]string{})
+	manager.mgm = NewMetaServiceGroupManager(metaServiceGroupStore, map[string]string{}, nil)
 	manager.mgm.SetKeyspaceAssignmentCounter(manager.CountKeyspacesByMetaServiceGroup)
 
 	created, err := manager.CreateKeyspace(&CreateKeyspaceRequest{

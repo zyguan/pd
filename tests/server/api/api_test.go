@@ -179,7 +179,7 @@ func (suite *middlewareTestSuite) TestRequestInfoMiddleware() {
 
 	re.Equal("Profile", resp.Header.Get("service-label"))
 	re.JSONEq("{\"seconds\":[\"1\"]}", resp.Header.Get("url-param"))
-	re.JSONEq("{\"testkey\":\"testvalue\"}", resp.Header.Get("body-param"))
+	re.Empty(resp.Header.Get("body-param"))
 	re.Equal("HTTP/1.1/POST:/pd/api/v1/debug/pprof/profile", resp.Header.Get("method"))
 	re.Equal("anonymous", resp.Header.Get("caller-id"))
 	re.Equal("127.0.0.1", resp.Header.Get("ip"))
@@ -511,8 +511,7 @@ func (suite *middlewareTestSuite) TestAuditPrometheusBackend() {
 
 func (suite *middlewareTestSuite) TestAuditLocalLogBackend() {
 	re := suite.Require()
-	fname := testutil.InitTempFileLogger("info")
-	defer os.RemoveAll(fname)
+	fname := testutil.InitTempFileLogger(suite.T(), "info")
 	leader := suite.cluster.GetLeaderServer()
 	re.NotNil(leader)
 	input := map[string]any{
@@ -537,6 +536,7 @@ func (suite *middlewareTestSuite) TestAuditLocalLogBackend() {
 	b, err := os.ReadFile(fname)
 	re.NoError(err)
 	re.Contains(string(b), "audit log")
+	re.Contains(string(b), `BodyParam:\"info\"`)
 	re.NoError(err)
 	re.Equal(http.StatusOK, resp.StatusCode)
 }
@@ -797,8 +797,7 @@ func (suite *redirectorTestSuite) TestXForwardedFor() {
 	re := suite.Require()
 	leader := suite.cluster.GetLeaderServer()
 	re.NoError(leader.BootstrapCluster())
-	fname := testutil.InitTempFileLogger("info")
-	defer os.RemoveAll(fname)
+	fname := testutil.InitTempFileLogger(suite.T(), "info")
 
 	follower := suite.cluster.GetServer(suite.cluster.GetFollower())
 	addr := follower.GetAddr() + "/pd/api/v1/regions"

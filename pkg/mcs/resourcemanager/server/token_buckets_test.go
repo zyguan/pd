@@ -504,3 +504,109 @@ func TestFractionalAllocationWithinSmallGroupBudget(t *testing.T) {
 	}
 	re.InDelta(1.0, sum, 1e-12)
 }
+
+func TestServiceLimitedClientAllocation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		fillRate      uint64
+		burstLimit    int64
+		overrideFill  float64
+		overrideBurst int64
+		wantHot       int64
+		wantCold      int64
+	}{
+		{"unlimited group", UnlimitedRate, -1, -1, 160000, 92500, 67500},
+		{"lower service budget", UnlimitedRate, -1, -1, 120000, 72500, 47500},
+		{"hot demand above equal share", UnlimitedRate, -1, -1, 80000, 55000, 25000},
+		{"both demands above equal share", UnlimitedRate, -1, -1, 40000, 20000, 20000},
+		{"moderated group", UnlimitedRate, -2, -1, 160000, 92500, 67500},
+		{"finite refill below budget", 100000, -1, -1, 160000, 100000, 60000},
+		{"overridden refill", UnlimitedRate, -1, 100000, 100000, 62500, 37500},
+		{"fractional overridden refill", UnlimitedRate, -1, 100000.5, 100000, 62500, 37500},
+		{"explicit burst", UnlimitedRate, 160000, -1, 120000, 60000, 59999},
+		{"rate controlled", UnlimitedRate, 0, -1, 120000, 60000, 59999},
+		{"service disabled", UnlimitedRate, -1, -1, -1, -1, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			re := require.New(t)
+			gtb := NewGroupTokenBucket(testResourceGroupName, &rmpb.TokenBucket{
+				Settings: &rmpb.TokenLimitSettings{FillRate: tc.fillRate, BurstLimit: tc.burstLimit},
+			})
+			gtb.overrideFillRate = tc.overrideFill
+			gtb.overrideBurstLimit = tc.overrideBurst
+			gtb.grt = newGroupRUTracker()
+			now := time.Now()
+			for i, demand := range []float64{50000, 25000} {
+				id := uint64(i + 1)
+				gtb.tokenSlots[id] = newTokenSlot(id, now)
+				rt := gtb.grt.getOrCreateRUTracker(id)
+				rt.initialized = true
+				rt.lastSampleTime = now
+				rt.lastEMA = demand
+			}
+			fillRate := gtb.getFillRate()
+			const tokensForBalance = 10000.0
+			gtb.balanceSlotTokens(now, 1, 1, tokensForBalance)
+			re.Equal(fillRate, gtb.getFillRate())
+			re.Equal(tc.fillRate, gtb.Settings.FillRate)
+			re.Equal(tc.burstLimit, gtb.Settings.BurstLimit)
+			re.Equal(tc.wantHot, gtb.tokenSlots[1].burstLimit)
+			re.Equal(tc.wantCold, gtb.tokenSlots[2].burstLimit)
+			re.InDelta(fillRate, gtb.tokenSlots[1].fillRate+gtb.tokenSlots[2].fillRate, 1e-6)
+			if tc.overrideBurst > 0 {
+				for _, slot := range gtb.tokenSlots {
+					// Refill and newly assigned tokens must use the same share as capacity.
+					ratio := float64(slot.burstLimit) / float64(tc.overrideBurst)
+					re.InDelta(ratio, slot.fillRate/fillRate, 1/float64(tc.overrideBurst))
+					re.InDelta(ratio, slot.curTokenCapacity/tokensForBalance, 1/float64(tc.overrideBurst))
+					re.Equal(slot.curTokenCapacity, slot.lastTokenCapacity)
+				}
+				re.InDelta(tokensForBalance, gtb.tokenSlots[1].curTokenCapacity+gtb.tokenSlots[2].curTokenCapacity, 1e-7)
+				// Removing the other client restores the whole group allocation.
+				gtb.Tokens = tokensForBalance
+				gtb.balanceSlotTokens(now, 2, 0, 0)
+				re.Len(gtb.tokenSlots, 1)
+				re.Equal(fillRate, gtb.tokenSlots[1].fillRate)
+				re.Equal(tc.overrideBurst, gtb.tokenSlots[1].burstLimit)
+				re.Equal(tokensForBalance, gtb.tokenSlots[1].curTokenCapacity)
+			}
+		})
+	}
+}
+
+func TestGroupTokenBucketRequestUnlimitedFillRateLoan(t *testing.T) {
+	re := require.New(t)
+	// The default group keeps its unlimited fill rate while the Service Limit
+	// only overrides the burst limit.
+	gtb := NewGroupTokenBucket(testResourceGroupName, &rmpb.TokenBucket{
+		Settings: &rmpb.TokenLimitSettings{FillRate: UnlimitedRate, BurstLimit: -1},
+	})
+	gtb.overrideBurstLimit = 100000
+	now := time.Now()
+	_, trickle := gtb.request(now, 100, 5000, 1)
+	re.Zero(trickle)
+	// A zero-token request deletes the slot and the bucket refills to the burst limit.
+	gtb.request(now.Add(time.Second), 0, 5000, 99)
+	re.Equal(100000.0, gtb.Tokens)
+	// A new slot joining a full bucket has no tokens of its own yet, so its
+	// grant is a loan. The unlimited fill rate repays it on the next refill,
+	// so the grant must not be trickled over the whole target period.
+	grant, trickle := gtb.request(now.Add(2*time.Second), 364.3, 5000, 2)
+	re.InDelta(364.3, grant.Tokens, 1e-9)
+	re.Zero(trickle)
+	// The same holds for a slot that is already in debt.
+	grant, trickle = gtb.request(now.Add(2*time.Second), 100, 5000, 2)
+	re.InDelta(100, grant.Tokens, 1e-9)
+	re.Zero(trickle)
+	re.Less(gtb.tokenSlots[2].curTokenCapacity, 0.0)
+	// The next refill repays the debt, so no runaway loan builds up.
+	grant, trickle = gtb.request(now.Add(3*time.Second), 100, 5000, 2)
+	re.InDelta(100, grant.Tokens, 1e-9)
+	re.Zero(trickle)
+	re.Greater(gtb.tokenSlots[2].curTokenCapacity, 0.0)
+	// A limited fill rate keeps smoothing such a loan over the target period.
+	gtb.overrideFillRate = 50000
+	grant, trickle = gtb.request(now.Add(3*time.Second), 100, 5000, 3)
+	re.InDelta(100, grant.Tokens, 1e-9)
+	re.Equal(int64(5000), trickle)
+}
