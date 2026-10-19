@@ -214,6 +214,104 @@ func TestStoreHeartbeat(t *testing.T) {
 	re.Equal(uint64(1), storeStats[1][0].RegionID)
 }
 
+func TestStoreHeartbeatPreserveConcurrentTxnProtocolVersionRange(t *testing.T) {
+	for _, versionRange := range []struct {
+		name  string
+		value *metapb.TxnProtocolVersionRange
+	}{
+		{name: "lower", value: &metapb.TxnProtocolVersionRange{Max: 1}},
+		{name: "clear"},
+		{name: "empty", value: &metapb.TxnProtocolVersionRange{}},
+	} {
+		t.Run(versionRange.name, func(t *testing.T) {
+			re := require.New(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, opt, err := newTestScheduleConfig()
+			re.NoError(err)
+			cluster := newTestRaftCluster(ctx, mockid.NewIDAllocator(), opt, storage.NewStorageWithMemoryBackend())
+			meta := newTestStores(1, "2.0.0")[0].GetMeta()
+			meta.TxnProtocolVersionRange = &metapb.TxnProtocolVersionRange{Max: 2}
+			re.NoError(cluster.PutMetaStore(meta))
+
+			// Stop the heartbeat after its metadata snapshot has been built.
+			// Registration must wait until that snapshot is persisted and the
+			// heartbeat options have been applied to the cache.
+			reached := make(chan struct{})
+			resume := make(chan struct{})
+			var resumeOnce sync.Once
+			resumeHeartbeat := func() { resumeOnce.Do(func() { close(resume) }) }
+			const heartbeatName = "github.com/tikv/pd/server/cluster/beforePersistStoreHeartbeat"
+			re.NoError(failpoint.EnableCall(heartbeatName, func() {
+				close(reached)
+				select {
+				case <-resume:
+				case <-ctx.Done():
+				}
+			}))
+			t.Cleanup(func() { re.NoError(failpoint.Disable(heartbeatName)) })
+
+			wg := &sync.WaitGroup{}
+			defer wg.Wait()
+			defer resumeHeartbeat()
+			heartbeatDone := make(chan error, 1)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				heartbeatDone <- cluster.HandleStoreHeartbeat(&pdpb.StoreHeartbeatRequest{
+					Stats: &pdpb.StoreStats{StoreId: 1, Capacity: 100, Available: 50},
+				}, &pdpb.StoreHeartbeatResponse{})
+			}()
+			select {
+			case <-reached:
+			case <-ctx.Done():
+				t.Fatal("heartbeat did not reach persistence")
+			}
+
+			started := make(chan struct{})
+			const putName = "github.com/tikv/pd/server/cluster/beforePutStore"
+			re.NoError(failpoint.EnableCall(putName, func() { close(started) }))
+			t.Cleanup(func() { re.NoError(failpoint.Disable(putName)) })
+			registrationDone := make(chan error, 1)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				registration := typeutil.DeepClone(meta, core.StoreFactory)
+				registration.TxnProtocolVersionRange = versionRange.value
+				registrationDone <- cluster.PutMetaStore(registration)
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("registration did not start")
+			}
+			select {
+			case err := <-registrationDone:
+				t.Fatalf("registration completed before the heartbeat was released: %v", err)
+			case <-time.After(50 * time.Millisecond):
+			}
+			resumeHeartbeat()
+			for _, done := range []<-chan error{heartbeatDone, registrationDone} {
+				select {
+				case err := <-done:
+					re.NoError(err)
+				case <-ctx.Done():
+					t.Fatal("store update did not finish")
+				}
+			}
+
+			persisted := &metapb.Store{}
+			ok, err := cluster.storage.LoadStoreMeta(1, persisted)
+			re.NoError(err)
+			re.True(ok)
+			for _, store := range []*metapb.Store{cluster.GetStore(1).GetMeta(), persisted} {
+				re.Equal(versionRange.value, store.GetTxnProtocolVersionRange())
+				re.Positive(store.GetLastHeartbeat())
+			}
+		})
+	}
+}
+
 func TestStoreMutationsRejectTombstoneStore(t *testing.T) {
 	re := require.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -508,6 +606,19 @@ func TestForceBuryStore(t *testing.T) {
 	re.NoError(cluster.BuryStore(uint64(1), true))
 	re.Error(cluster.BuryStore(uint64(2), true))
 	re.True(errors.ErrorEqual(cluster.BuryStore(uint64(3), true), errs.ErrStoreNotFound.FastGenByArgs(uint64(3))))
+}
+
+func TestPutMetaStoreInvalidStore(t *testing.T) {
+	re := require.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, opt, err := newTestScheduleConfig()
+	re.NoError(err)
+	cluster := newTestRaftCluster(ctx, mockid.NewIDAllocator(), opt, storage.NewStorageWithMemoryBackend())
+	for _, store := range []*metapb.Store{nil, {}} {
+		re.ErrorContains(cluster.PutMetaStore(store), "invalid put store")
+	}
+	re.Zero(cluster.GetStoreCount())
 }
 
 func TestStoreLabelsPreserveConcurrentTxnProtocolVersionRange(t *testing.T) {
