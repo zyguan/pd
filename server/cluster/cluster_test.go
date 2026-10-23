@@ -255,13 +255,11 @@ func TestStoreHeartbeatPreserveConcurrentTxnProtocolVersionRange(t *testing.T) {
 			defer wg.Wait()
 			defer resumeHeartbeat()
 			heartbeatDone := make(chan error, 1)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				heartbeatDone <- cluster.HandleStoreHeartbeat(&pdpb.StoreHeartbeatRequest{
 					Stats: &pdpb.StoreStats{StoreId: 1, Capacity: 100, Available: 50},
 				}, &pdpb.StoreHeartbeatResponse{})
-			}()
+			})
 			select {
 			case <-reached:
 			case <-ctx.Done():
@@ -273,13 +271,11 @@ func TestStoreHeartbeatPreserveConcurrentTxnProtocolVersionRange(t *testing.T) {
 			re.NoError(failpoint.EnableCall(putName, func() { close(started) }))
 			t.Cleanup(func() { re.NoError(failpoint.Disable(putName)) })
 			registrationDone := make(chan error, 1)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				registration := typeutil.DeepClone(meta, core.StoreFactory)
 				registration.TxnProtocolVersionRange = versionRange.value
 				registrationDone <- cluster.PutMetaStore(registration)
-			}()
+			})
 			select {
 			case <-started:
 			case <-ctx.Done():
@@ -603,8 +599,7 @@ func TestForceBuryStore(t *testing.T) {
 
 func TestPutMetaStoreInvalidStore(t *testing.T) {
 	re := require.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	_, opt, err := newTestScheduleConfig()
 	re.NoError(err)
 	cluster := newTestRaftCluster(ctx, mockid.NewIDAllocator(), opt, storage.NewStorageWithMemoryBackend())
@@ -652,8 +647,7 @@ func TestStoreLabelsPreserveConcurrentTxnProtocolVersionRange(t *testing.T) {
 		} {
 			t.Run(operation.name+"/"+versionRange.name, func(t *testing.T) {
 				re := require.New(t)
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
+				ctx := t.Context()
 				_, opt, err := newTestScheduleConfig()
 				re.NoError(err)
 				cluster := newTestRaftCluster(ctx, mockid.NewIDAllocator(), opt, storage.NewStorageWithMemoryBackend())
@@ -726,11 +720,9 @@ func TestStoreLabelsSerializeRegistration(t *testing.T) {
 	defer wg.Wait()
 	defer resumeLabelUpdate()
 	labelDone := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		labelDone <- cluster.UpdateStoreLabels(1, []*metapb.StoreLabel{{Key: "zone", Value: "z2"}}, false)
-	}()
+	})
 	select {
 	case <-reached:
 	case <-ctx.Done():
@@ -742,13 +734,11 @@ func TestStoreLabelsSerializeRegistration(t *testing.T) {
 	re.NoError(failpoint.EnableCall(putName, func() { close(started) }))
 	t.Cleanup(func() { re.NoError(failpoint.Disable(putName)) })
 	registrationDone := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		registration := typeutil.DeepClone(meta, core.StoreFactory)
 		registration.TxnProtocolVersionRange = nil
 		registrationDone <- cluster.PutMetaStore(registration)
-	}()
+	})
 	select {
 	case <-started:
 	case <-ctx.Done():
@@ -5303,12 +5293,10 @@ func TestConcurrentStoreStats(t *testing.T) {
 			break
 		}
 		storeID := i + 1
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cluster.UpdateAllStoreStatus()
 			cluster.checkStores()
-		}()
+		})
 		re.NoError(cluster.RemoveStore(storeID, false))
 		testutil.Eventually(re, func() bool {
 			return metapb.NodeState_Removing == cluster.GetStore(storeID).GetNodeState()
@@ -5488,14 +5476,12 @@ func TestStopDoesNotHoldClusterLockWhileWaitingSchedulingJobs(t *testing.T) {
 	cluster.schedulingController.running = true
 
 	blockedOnClusterLock := make(chan struct{})
-	cluster.schedulingController.wg.Add(1)
-	go func() {
-		defer cluster.schedulingController.wg.Done()
+	cluster.schedulingController.wg.Go(func() {
 		<-cluster.schedulingController.ctx.Done()
 		cluster.RLock()
 		close(blockedOnClusterLock)
 		cluster.RUnlock()
-	}()
+	})
 
 	stopped := make(chan struct{})
 	go func() {
